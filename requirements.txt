@@ -1,0 +1,14 @@
+
+kagglehub
+
+opencv-python
+mediapipe
+
+numpy
+pandas
+scikit-learn
+
+pyautogui
+
+jupyterlab
+cv2
