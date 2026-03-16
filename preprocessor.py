@@ -18,7 +18,6 @@ import argparse
 import random
 import urllib.request
 import numpy as np
-import kagglehub
 import mediapipe as mp
 from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision
@@ -136,6 +135,13 @@ def process_dataset(dataset_path: str, output_csv: str, class_map: dict = None, 
 
 
 def download_kaggle(slug: str) -> str:
+    try:
+        import kagglehub
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(
+            "Missing dependency 'kagglehub'. Install it with: py -m pip install kagglehub"
+        ) from exc
+
     print(f"Downloading '{slug}' from Kaggle...")
     path = kagglehub.dataset_download(slug)
     print(f"Dataset ready at: {path}\n")
