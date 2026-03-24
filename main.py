@@ -18,6 +18,7 @@ import os
 import time
 import urllib.request
 from collections import Counter, deque
+from typing import Any
 
 import cv2
 import mediapipe as mp
@@ -63,14 +64,71 @@ def normalize(landmarks: list[float]) -> list[float]:
 	return coords.flatten().tolist()
 
 
-def extract_landmarks(image_bgr: np.ndarray, detector: vision.HandLandmarker) -> list[float] | None:
+def wrist_xy(hand_landmarks: list) -> np.ndarray:
+	return np.array([hand_landmarks[0].x, hand_landmarks[0].y], dtype=np.float32)
+
+
+def hand_area(hand_landmarks: list) -> float:
+	xs = [lm.x for lm in hand_landmarks]
+	ys = [lm.y for lm in hand_landmarks]
+	return float((max(xs) - min(xs)) * (max(ys) - min(ys)))
+
+
+def hand_bbox(hand_landmarks: list, frame_shape: tuple[int, int, int]) -> tuple[int, int, int, int]:
+	h, w = frame_shape[:2]
+	xs = [lm.x for lm in hand_landmarks]
+	ys = [lm.y for lm in hand_landmarks]
+	x1 = max(0, int(min(xs) * w))
+	y1 = max(0, int(min(ys) * h))
+	x2 = min(w - 1, int(max(xs) * w))
+	y2 = min(h - 1, int(max(ys) * h))
+
+	# Pad to a square so it is easy to see which hand is interpreted.
+	box_w = x2 - x1
+	box_h = y2 - y1
+	side = max(box_w, box_h)
+	cx = (x1 + x2) // 2
+	cy = (y1 + y2) // 2
+	half = max(1, side // 2)
+
+	sx1 = max(0, cx - half)
+	sy1 = max(0, cy - half)
+	sx2 = min(w - 1, cx + half)
+	sy2 = min(h - 1, cy + half)
+	return sx1, sy1, sx2, sy2
+
+
+def extract_landmarks(
+	image_bgr: np.ndarray,
+	detector: Any,
+	tracked_wrist: np.ndarray | None,
+) -> tuple[list[float] | None, np.ndarray | None, tuple[int, int, int, int] | None]:
 	image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
 	mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
 	result = detector.detect(mp_image)
 	if not result.hand_landmarks:
-		return None
-	hand = result.hand_landmarks[0]
-	return [coord for lm in hand for coord in (lm.x, lm.y)]
+		return None, None, None
+
+	hands = result.hand_landmarks
+	if len(hands) == 1:
+		hand = hands[0]
+		new_wrist = wrist_xy(hand)
+		bbox = hand_bbox(hand, image_bgr.shape)
+		return [coord for lm in hand for coord in (lm.x, lm.y)], new_wrist, bbox
+
+	# Keep tracking one hand across frames when two are visible.
+	if tracked_wrist is not None:
+		closest_idx = int(np.argmin([
+			np.linalg.norm(wrist_xy(hand) - tracked_wrist) for hand in hands
+		]))
+		hand = hands[closest_idx]
+	else:
+		largest_idx = int(np.argmax([hand_area(hand) for hand in hands]))
+		hand = hands[largest_idx]
+
+	new_wrist = wrist_xy(hand)
+	bbox = hand_bbox(hand, image_bgr.shape)
+	return [coord for lm in hand for coord in (lm.x, lm.y)], new_wrist, bbox
 
 
 def majority_vote(labels: deque[str]) -> str:
@@ -90,7 +148,7 @@ def main() -> None:
 
 	options = HandLandmarkerOptions(
 		base_options=mp_python.BaseOptions(model_asset_path=MODEL_PATH),
-		num_hands=1,
+		num_hands=2,
 		min_hand_detection_confidence=0.4,
 		min_hand_presence_confidence=0.4,
 		min_tracking_confidence=0.4,
@@ -103,6 +161,7 @@ def main() -> None:
 	history: deque[str] = deque(maxlen=max(1, args.window))
 	last_volume_action_ts = 0.0
 	last_volume_action = "none"
+	tracked_wrist: np.ndarray | None = None
 
 	with vision.HandLandmarker.create_from_options(options) as detector:
 		while True:
@@ -111,7 +170,7 @@ def main() -> None:
 				break
 
 			frame = cv2.flip(frame, 1)
-			landmarks = extract_landmarks(frame, detector)
+			landmarks, tracked_wrist, selected_bbox = extract_landmarks(frame, detector, tracked_wrist)
 
 			raw_label = "unknown"
 			confidence = 0.0
@@ -124,6 +183,12 @@ def main() -> None:
 				confidence = float(probs[best_idx])
 				candidate = class_names[best_idx]
 				raw_label = candidate if confidence >= args.threshold else "unknown"
+
+			if selected_bbox is not None:
+				x1, y1, x2, y2 = selected_bbox
+				cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
+				cv2.putText(frame, "Tracked hand", (x1, max(18, y1 - 8)),
+							cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2)
 
 			history.append(raw_label)
 			smooth_label = majority_vote(history)
