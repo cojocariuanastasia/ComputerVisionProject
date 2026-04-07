@@ -6,9 +6,7 @@ Runs real-time gesture prediction from webcam using:
 2) Trained Random Forest model from trainer.py
 
 Usage:
-	py main.py
-	py main.py --model models/gesture_rf.joblib --camera 0 --threshold 0.70
-    py main.py --model models/gesture_rf.joblib --camera 0 --threshold 0.70 --window 5 --volume_cooldown 0.60 
+	py main.py --model models/gesture_rf.joblib --camera 0 --threshold 0.70 --window 5 --volume_cooldown 0.60 --play_pause_cooldown 2.00
 """
 
 from __future__ import annotations
@@ -25,6 +23,7 @@ import mediapipe as mp
 import numpy as np
 import pandas as pd
 import pyautogui
+import pygetwindow as gw
 from joblib import load
 from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision
@@ -51,7 +50,9 @@ def parse_args() -> argparse.Namespace:
 	parser.add_argument("--window", type=int, default=5,
 						help="Smoothing window size in frames")
 	parser.add_argument("--volume_cooldown", type=float, default=0.60,
-						help="Minimum seconds between volume key presses")
+						help="Minimum seconds between volume up/down presses")
+	parser.add_argument("--play_pause_cooldown", type=float, default=1.50,
+						help="Minimum seconds between palm play/pause presses")
 	return parser.parse_args()
 
 
@@ -137,6 +138,18 @@ def majority_vote(labels: deque[str]) -> str:
 	return Counter(labels).most_common(1)[0][0]
 
 
+def minimize_spotify_window() -> bool:
+	# Finds a Spotify window by title and minimizes it.
+	try:
+		windows = [w for w in gw.getWindowsWithTitle("Spotify") if w.title]
+		if not windows:
+			return False
+		windows[0].minimize()
+		return True
+	except Exception:
+		return False
+
+
 def main() -> None:
 	args = parse_args()
 	ensure_landmarker_model()
@@ -159,8 +172,10 @@ def main() -> None:
 		raise RuntimeError(f"Cannot open camera {args.camera}")
 
 	history: deque[str] = deque(maxlen=max(1, args.window))
+	last_palm_action_ts = 0.0
+	last_fist_action_ts = 0.0
 	last_volume_action_ts = 0.0
-	last_volume_action = "none"
+	last_media_action = "none"
 	tracked_wrist: np.ndarray | None = None
 
 	with vision.HandLandmarker.create_from_options(options) as detector:
@@ -194,22 +209,31 @@ def main() -> None:
 			smooth_label = majority_vote(history)
 
 			now = time.time()
-			if now - last_volume_action_ts >= max(0.0, args.volume_cooldown):
-				if smooth_label == "like":
-					pyautogui.press("volumeup")
-					last_volume_action_ts = now
-					last_volume_action = "UP"
-				elif smooth_label == "dislike":
-					pyautogui.press("volumedown")
-					last_volume_action_ts = now
-					last_volume_action = "DOWN"
+			palm_cooldown = max(0.0, args.play_pause_cooldown)
+			if smooth_label == "palm" and now - last_palm_action_ts >= palm_cooldown:
+				# Toggle playback for the active media app (Spotify).
+				pyautogui.press("playpause")
+				last_palm_action_ts = now
+				last_media_action = "PLAY/PAUSE"
+			elif smooth_label == "fist" and now - last_fist_action_ts >= max(0.0, args.volume_cooldown):
+				minimized = minimize_spotify_window()
+				last_fist_action_ts = now
+				last_media_action = "MINIMIZE" if minimized else "SPOTIFY NOT FOUND"
+			elif smooth_label == "like" and now - last_volume_action_ts >= max(0.0, args.volume_cooldown):
+				pyautogui.press("volumeup")
+				last_volume_action_ts = now
+				last_media_action = "VOLUME UP"
+			elif smooth_label == "dislike" and now - last_volume_action_ts >= max(0.0, args.volume_cooldown):
+				pyautogui.press("volumedown")
+				last_volume_action_ts = now
+				last_media_action = "VOLUME DOWN"
 
 			cv2.rectangle(frame, (0, 0), (frame.shape[1], 80), (20, 20, 20), -1)
 			cv2.putText(frame, f"Prediction: {smooth_label}", (12, 30),
 						cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 220, 0), 2)
 			cv2.putText(frame, f"Confidence: {confidence:.2f}", (12, 62),
 						cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2)
-			cv2.putText(frame, f"Volume action: {last_volume_action}", (300, 62),
+			cv2.putText(frame, f"Media action: {last_media_action}", (300, 62),
 						cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 			cv2.putText(frame, "Press Q to quit", (frame.shape[1] - 180, frame.shape[0] - 12),
 						cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
