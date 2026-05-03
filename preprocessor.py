@@ -7,8 +7,8 @@ from each image, and saves the resulting feature vectors to a CSV file.
 Each row in the CSV: label + 42 floats (x, y) for 21 landmarks.
 
 Usage:
-    python preprocessor.py
-    python preprocessor.py --custom ./custom_dataset --samples_per_class 500
+    python preprocessor.py --custom ./custom_dataset ./cv_project/my_data2 --samples_per_class 500
+    python preprocessor.py --dataset_path "C:/path/to/hagrid" --custom ./custom_dataset ./other_data
 """
 
 import os
@@ -18,6 +18,7 @@ import argparse
 import random
 import urllib.request
 import numpy as np
+import kagglehub
 import mediapipe as mp
 from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision
@@ -77,6 +78,10 @@ def normalize(landmarks: list) -> list:
     return coords.flatten().tolist()
 
 
+def count_images(folder: Path) -> int:
+    return len([p for p in folder.iterdir() if p.suffix.lower() in VALID_EXTENSIONS])
+
+
 def process_folder(folder: Path, label: str, writer, detector, limit: int = None) -> tuple[int, int]:
     image_paths = [p for p in folder.iterdir() if p.suffix.lower() in VALID_EXTENSIONS]
 
@@ -99,53 +104,25 @@ def process_folder(folder: Path, label: str, writer, detector, limit: int = None
     return ok, skip
 
 
-def process_dataset(dataset_path: str, output_csv: str, class_map: dict = None, limit: int = None):
-    dataset_root = Path(dataset_path)
-
-    if class_map:
-        class_dirs = [(dataset_root / folder, label)
-                      for folder, label in class_map.items()
-                      if (dataset_root / folder).exists()]
-    else:
-        class_dirs = [(d, d.name) for d in sorted(dataset_root.iterdir()) if d.is_dir()]
-
-    if not class_dirs:
-        raise FileNotFoundError(f"No valid class folders found in '{dataset_root}'")
-
-    total_ok, total_skip = 0, 0
-    stats = {}
+def process_custom_sources(custom_paths: list, output_csv: str, detector) -> dict:
+    """Process multiple custom dataset folders and return per-class image counts."""
+    custom_counts = {}
 
     with open(output_csv, "a", newline="") as csv_file:
         writer = csv.writer(csv_file)
-        with build_detector() as detector:
+        for source_path in custom_paths:
+            root = Path(source_path)
+            print(f"\nProcessing custom dataset: {root}")
+            class_dirs = [(d, d.name) for d in sorted(root.iterdir()) if d.is_dir()]
+            if not class_dirs:
+                print(f"WARNING: no class subfolders found in '{root}', skipping.")
+                continue
             for folder, label in class_dirs:
-                ok, skip = process_folder(folder, label, writer, detector, limit=limit)
-                stats[label] = (ok, skip)
-                total_ok   += ok
-                total_skip += skip
+                ok, skip = process_folder(folder, label, writer, detector)
+                custom_counts[label] = custom_counts.get(label, 0) + ok
+                print(f"    {label}: {ok} saved ({skip} skipped)")
 
-    print("\n" + "=" * 50)
-    print(f"{'Class':<20} {'Saved':>8} {'Skipped':>10}")
-    print("-" * 50)
-    for label, (ok, skip) in stats.items():
-        print(f"{label:<20} {ok:>8} {skip:>10}")
-    print("-" * 50)
-    print(f"{'TOTAL':<20} {total_ok:>8} {total_skip:>10}")
-    print(f"\nCSV saved to: {output_csv}")
-
-
-def download_kaggle(slug: str) -> str:
-    try:
-        import kagglehub
-    except ModuleNotFoundError as exc:
-        raise ModuleNotFoundError(
-            "Missing dependency 'kagglehub'. Install it with: py -m pip install kagglehub"
-        ) from exc
-
-    print(f"Downloading '{slug}' from Kaggle...")
-    path = kagglehub.dataset_download(slug)
-    print(f"Dataset ready at: {path}\n")
-    return path
+    return custom_counts
 
 
 def parse_args():
@@ -153,8 +130,8 @@ def parse_args():
     parser.add_argument("--dataset_path",      type=str, default=None)
     parser.add_argument("--kaggle_slug",       type=str, default="innominate817/hagrid-sample-120k-384p")
     parser.add_argument("--output",            type=str, default="data/gestures_dataset.csv")
-    parser.add_argument("--custom",            type=str, default=None,
-                        help="Custom dataset path to merge (e.g. ./custom_dataset)")
+    parser.add_argument("--custom",            type=str, nargs="+", default=None,
+                        help="One or more custom dataset paths to merge")
     parser.add_argument("--samples_per_class", type=int, default=500,
                         help="Total samples per class across all sources (default: 500)")
     return parser.parse_args()
@@ -162,6 +139,7 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
+    ensure_model()
     os.makedirs(Path(args.output).parent, exist_ok=True)
 
     if os.path.exists(args.output):
@@ -170,39 +148,35 @@ if __name__ == "__main__":
     with open(args.output, "w", newline="") as f:
         csv.writer(f).writerow(HEADER)
 
-    # Count custom samples already collected per class
     custom_counts = {}
-    if args.custom:
-        print("\n--- Processing custom dataset (priority) ---")
-        process_dataset(args.custom, args.output, class_map=None, limit=None)
-        for d in Path(args.custom).iterdir():
-            if d.is_dir():
-                custom_counts[d.name] = len([p for p in d.iterdir()
-                                             if p.suffix.lower() in VALID_EXTENSIONS])
 
-    # Fill remaining quota from HaGRID
-    hagrid_limits = {
-        folder: max(0, args.samples_per_class - custom_counts.get(label, 0))
-        for folder, label in HAGRID_CLASS_MAP.items()
-    }
+    with build_detector() as detector:
+        # Process all custom sources first
+        if args.custom:
+            custom_counts = process_custom_sources(args.custom, args.output, detector)
 
-    print("\n--- Processing HaGRID ---")
-    print(f"  Fetching from HaGRID per class: { {k: v for k, v in hagrid_limits.items()} }")
+        # Fill remaining quota from HaGRID
+        hagrid_limits = {
+            folder: max(0, args.samples_per_class - custom_counts.get(label, 0))
+            for folder, label in HAGRID_CLASS_MAP.items()
+        }
 
-    dataset_path = args.dataset_path or download_kaggle(args.kaggle_slug)
+        print("\nProcessing HaGRID")
+        print(f"  Quota remaining per class: { {v: hagrid_limits[k] for k, v in HAGRID_CLASS_MAP.items()} }")
 
-    dataset_root = Path(dataset_path)
-    with open(args.output, "a", newline="") as csv_file:
-        writer = csv.writer(csv_file)
-        with build_detector() as detector:
+        dataset_path = args.dataset_path or kagglehub.dataset_download(args.kaggle_slug)
+        dataset_root = Path(dataset_path)
+
+        with open(args.output, "a", newline="") as csv_file:
+            writer = csv.writer(csv_file)
             for folder, label in HAGRID_CLASS_MAP.items():
                 folder_path = dataset_root / folder
                 if not folder_path.exists():
-                    print(f"  WARNING: folder '{folder}' not found in HaGRID, skipping.")
+                    print(f"  WARNING: '{folder}' not found in HaGRID, skipping.")
                     continue
                 limit = hagrid_limits[folder]
                 if limit == 0:
-                    print(f"  {label}: quota already met by custom dataset, skipping HaGRID.")
+                    print(f"  {label}: quota met by custom data, skipping HaGRID.")
                     continue
                 ok, skip = process_folder(folder_path, label, writer, detector, limit=limit)
                 print(f"    {label}: {ok} saved from HaGRID")
