@@ -99,10 +99,7 @@ def hand_bbox(hand_landmarks: list, frame_shape: tuple[int, int, int]) -> tuple[
 	return sx1, sy1, sx2, sy2
 
 
-def extract_landmarks(
-	image_bgr: np.ndarray,
-	detector: Any,
-	tracked_wrist: np.ndarray | None,
+def extract_landmarks(image_bgr: np.ndarray, detector: Any, tracked_wrist: np.ndarray | None,
 ) -> tuple[list[float] | None, np.ndarray | None, tuple[int, int, int, int] | None]:
 	image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
 	mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
@@ -179,6 +176,7 @@ def main() -> None:
 	tracked_wrist: np.ndarray | None = None
 
 	with vision.HandLandmarker.create_from_options(options) as detector:
+		prev_smooth_label = "unknown"
 		while True:
 			ok, frame = cap.read()
 			if not ok:
@@ -210,15 +208,11 @@ def main() -> None:
 
 			now = time.time()
 			palm_cooldown = max(0.0, args.play_pause_cooldown)
-			if smooth_label == "palm" and now - last_palm_action_ts >= palm_cooldown:
+			if smooth_label == "palm" and prev_smooth_label != "palm":
 				# Toggle playback for the active media app (Spotify).
 				pyautogui.press("playpause")
 				last_palm_action_ts = now
 				last_media_action = "PLAY/PAUSE"
-			elif smooth_label == "fist" and now - last_fist_action_ts >= max(0.0, args.volume_cooldown):
-				minimized = minimize_spotify_window()
-				last_fist_action_ts = now
-				last_media_action = "MINIMIZE" if minimized else "SPOTIFY NOT FOUND"
 			elif smooth_label == "like" and now - last_volume_action_ts >= max(0.0, args.volume_cooldown):
 				pyautogui.press("volumeup")
 				last_volume_action_ts = now
@@ -238,6 +232,7 @@ def main() -> None:
 			cv2.putText(frame, "Press Q to quit", (frame.shape[1] - 180, frame.shape[0] - 12),
 						cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
+			prev_smooth_label = smooth_label
 			cv2.imshow("Gesture Predictor", frame)
 			key = cv2.waitKey(1) & 0xFF
 			if key == ord("q"):
