@@ -10,7 +10,6 @@ env/
 venv/
 ENV/
 
-data/
 models/
 
 verified_landmarks/
