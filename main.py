@@ -136,15 +136,14 @@ def majority_vote(labels: deque[str]) -> str:
 
 
 def minimize_spotify_window() -> bool:
-	# Finds a Spotify window by title and minimizes it.
-	try:
-		windows = [w for w in gw.getWindowsWithTitle("Spotify") if w.title]
-		if not windows:
-			return False
-		windows[0].minimize()
-		return True
-	except Exception:
-		return False
+    try:
+        windows = [w for w in gw.getAllWindows() if "spotify" in w.title.lower() and w.title]
+        if not windows:
+            return False
+        windows[0].minimize()
+        return True
+    except Exception:
+        return False
 
 
 def main() -> None:
@@ -217,6 +216,11 @@ def main() -> None:
 				pyautogui.press("volumeup")
 				last_volume_action_ts = now
 				last_media_action = "VOLUME UP"
+
+			elif smooth_label == "fist" and prev_smooth_label != "fist":
+				minimized = minimize_spotify_window()
+				last_media_action = "CLOSE SPOTIFY" if minimized else "SPOTIFY NOT FOUND"
+
 			elif smooth_label == "dislike" and now - last_volume_action_ts >= max(0.0, args.volume_cooldown):
 				pyautogui.press("volumedown")
 				last_volume_action_ts = now
