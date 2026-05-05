@@ -1,0 +1,28 @@
+GESTURE CLASSIFIER EVALUATION REPORT
+
+
+Classification Report:
+              precision    recall  f1-score   support
+
+     dislike     0.9767    0.9231    0.9492        91
+        fist     0.9787    0.9787    0.9787        94
+        like     0.9485    1.0000    0.9735        92
+        palm     0.9897    0.9897    0.9897        97
+
+    accuracy                         0.9733       374
+   macro avg     0.9734    0.9729    0.9728       374
+weighted avg     0.9736    0.9733    0.9731       374
+
+Confusion Matrix (counts):
+              pred_dislike  pred_fist  pred_like  pred_palm
+true_dislike            84          2          4          1
+true_fist                1         92          1          0
+true_like                0          0         92          0
+true_palm                1          0          0         96
+
+5-Fold Cross-Validation Results:
+
+  accuracy               mean=0.9513  std=0.0090
+  f1_macro               mean=0.9510  std=0.0090
+  precision_macro        mean=0.9515  std=0.0089
+  recall_macro           mean=0.9511  std=0.0090
