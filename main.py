@@ -136,14 +136,43 @@ def majority_vote(labels: deque[str]) -> str:
 
 
 def minimize_spotify_window() -> bool:
-    try:
-        windows = [w for w in gw.getAllWindows() if "spotify" in w.title.lower() and w.title]
-        if not windows:
-            return False
-        windows[0].minimize()
-        return True
-    except Exception:
-        return False
+	# kept for backward compatibility (not used below)
+	try:
+		windows = [w for w in gw.getAllWindows() if "spotify" in (w.title or "").lower()]
+		if not windows:
+			return False
+		windows[0].minimize()
+		return True
+	except Exception:
+		return False
+
+
+def find_media_windows() -> list:
+	"""Return a list of windows that look like media apps or browsers (by title)."""
+	try:
+		keywords = [
+			"spotify",
+			"vlc",
+			"windows media",
+			"media player",
+			"youtube",
+			"chrome",
+			"google chrome",
+			"firefox",
+			"mozilla",
+			"edge",
+			"msedge",
+		]
+		matches = []
+		for w in gw.getAllWindows():
+			title = (w.title or "").lower()
+			if not title:
+				continue
+			if any(kw in title for kw in keywords):
+				matches.append(w)
+		return matches
+	except Exception:
+		return []
 
 
 def main() -> None:
@@ -173,6 +202,10 @@ def main() -> None:
 	last_volume_action_ts = 0.0
 	last_media_action = "none"
 	tracked_wrist: np.ndarray | None = None
+
+	# media window cycling state: minimize one matching window per `fist` gesture
+	media_windows: list = []
+	media_window_index = 0
 
 	with vision.HandLandmarker.create_from_options(options) as detector:
 		prev_smooth_label = "unknown"
@@ -218,8 +251,30 @@ def main() -> None:
 				last_media_action = "VOLUME UP"
 
 			elif smooth_label == "fist" and prev_smooth_label != "fist":
-				minimized = minimize_spotify_window()
-				last_media_action = "CLOSE SPOTIFY" if minimized else "SPOTIFY NOT FOUND"
+				# refresh current media windows list
+				current_windows = find_media_windows()
+				if not current_windows:
+					media_windows = []
+					media_window_index = 0
+					last_media_action = "NO MEDIA FOUND"
+				else:
+					# if the set/order changed, reset the index so we step through from start
+					current_titles = [w.title for w in current_windows]
+					cached_titles = [w.title for w in media_windows]
+					if cached_titles != current_titles:
+						media_windows = current_windows
+						media_window_index = 0
+					# ensure index is valid
+					if media_window_index >= len(media_windows):
+						media_window_index = 0
+					# minimize the window at the current index
+					target = media_windows[media_window_index]
+					try:
+						target.minimize()
+						last_media_action = f"MINIMIZED: {target.title}"
+						media_window_index = (media_window_index + 1) % len(media_windows)
+					except Exception:
+						last_media_action = f"FAILED MINIMIZE: {target.title}"
 
 			elif smooth_label == "dislike" and now - last_volume_action_ts >= max(0.0, args.volume_cooldown):
 				pyautogui.press("volumedown")
