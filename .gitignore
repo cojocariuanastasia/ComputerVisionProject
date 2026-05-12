@@ -12,7 +12,6 @@ ENV/
 
 models/
 
-verified_landmarks/
 custom_dataset/
 
 /hand_landmarker.task
