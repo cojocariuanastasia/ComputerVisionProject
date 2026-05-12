@@ -11,4 +11,5 @@ scikit-learn
 pyautogui
 
 jupyterlab
-cv2
+
+psutil
