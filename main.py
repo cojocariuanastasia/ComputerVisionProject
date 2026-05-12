@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 import pyautogui
 import pygetwindow as gw
+import psutil
 from joblib import load
 from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision
@@ -137,11 +138,22 @@ def majority_vote(labels: deque[str]) -> str:
 
 def minimize_spotify_window() -> bool:
     try:
-        windows = [w for w in gw.getAllWindows() if "spotify" in w.title.lower() and w.title]
-        if not windows:
+        import ctypes
+        spotify_pids = {
+            p.pid for p in psutil.process_iter(['name', 'pid'])
+            if p.info['name'] and 'spotify' in p.info['name'].lower()
+        }
+        if not spotify_pids:
             return False
-        windows[0].minimize()
-        return True
+        for w in gw.getAllWindows():
+            if not w.title:
+                continue
+            pid = ctypes.c_ulong()
+            ctypes.windll.user32.GetWindowThreadProcessId(w._hWnd, ctypes.byref(pid))
+            if pid.value in spotify_pids:
+                w.minimize()
+                return True
+        return False
     except Exception:
         return False
 
@@ -219,7 +231,7 @@ def main() -> None:
 
 			elif smooth_label == "fist" and prev_smooth_label != "fist":
 				minimized = minimize_spotify_window()
-				last_media_action = "CLOSE SPOTIFY" if minimized else "SPOTIFY NOT FOUND"
+				last_media_action = "MINIMIZE SPOTIFY" if minimized else "SPOTIFY NOT FOUND"
 
 			elif smooth_label == "dislike" and now - last_volume_action_ts >= max(0.0, args.volume_cooldown):
 				pyautogui.press("volumedown")
